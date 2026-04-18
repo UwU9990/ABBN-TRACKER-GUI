@@ -14,14 +14,14 @@ local MasterToggle = false
 local ActiveToggles = {Killers = false, Survivors = false, Traps = false, Clients = true}
 local PersistentVisuals = {Killers = {}, Survivors = {}, Traps = {}, Minions = {}, Clients = {}}
 
--- 1. EMOTE & SYNC ENGINE
+-- 1. THE REPLICATION ENGINE (Attributes)
 local ActiveEmoteName = nil
 local CurrentTracks = {} 
 local CurrentSounds = {} 
 
 local function stopAllEmotes()
     ActiveEmoteName = nil
-    character:SetAttribute("CurrentBBNEmote", "")
+    character:SetAttribute("CurrentBBNEmote", "") -- This tells other clients to stop
     for track, _ in pairs(CurrentTracks) do track:Stop() end
     for sound, _ in pairs(CurrentSounds) do sound:Stop(); sound:Destroy() end
     CurrentTracks = {}
@@ -32,7 +32,7 @@ local function playToggledEmote(module)
     if ActiveEmoteName == module.Name then stopAllEmotes() return end
     stopAllEmotes()
     ActiveEmoteName = module.Name
-    character:SetAttribute("CurrentBBNEmote", module.Name) 
+    character:SetAttribute("CurrentBBNEmote", module.Name) -- REPLICATES TO OTHERS
 
     local startAnim = module:FindFirstChild("Start") or module:FindFirstChild("Anim")
     local loopAnim = module:FindFirstChild("Loop")
@@ -55,7 +55,6 @@ local function playToggledEmote(module)
 
     if startAnim then
         local stTrack = humanoid:LoadAnimation(startAnim)
-        stTrack.Looped = (loopAnim == nil)
         stTrack:Play(); CurrentTracks[stTrack] = true
         if startSound then
             local stS = startSound:Clone(); stS.Parent = character:FindFirstChild("Head")
@@ -64,35 +63,57 @@ local function playToggledEmote(module)
         end
         if loopAnim then
             stTrack.Stopped:Connect(function()
-                CurrentTracks[stTrack] = nil
                 if ActiveEmoteName == module.Name then playLoop() end
             end)
+        else
+            stTrack.Looped = true
         end
     elseif loopAnim then playLoop() end
 end
 
--- Force Sync: Plays animations for other client users on your screen
-local function syncOtherClients()
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= localPlayer and p.Character then
-            local emoteName = p:GetAttribute("CurrentBBNEmote")
-            if emoteName and emoteName ~= "" then
-                local mod = ReplicatedStorage:FindFirstChild(emoteName, true)
-                if mod then
-                    local anim = mod:FindFirstChild("Loop") or mod:FindFirstChild("Start") or mod:FindFirstChild("Anim")
-                    local pHum = p.Character:FindFirstChild("Humanoid")
-                    if anim and pHum then
-                        pHum:LoadAnimation(anim):Play()
-                    end
+-- 2. LISTENING FOR OTHER CLIENTS
+local function handleOtherPlayer(p)
+    if p == localPlayer then return end
+    
+    local function onAttributeChanged()
+        local emoteName = p:GetAttribute("CurrentBBNEmote")
+        if not p.Character or not p.Character:FindFirstChild("Head") then return end
+        
+        -- Clean up old sync sounds
+        local old = p.Character.Head:FindFirstChild("BBNSync")
+        if old then old:Destroy() end
+
+        if emoteName and emoteName ~= "" then
+            local mod = ReplicatedStorage:FindFirstChild(emoteName, true)
+            if mod then
+                -- Play Sound for you to hear
+                local snd = mod:FindFirstChild("Sound") or mod:FindFirstChild("StartSound")
+                if snd then
+                    local s = snd:Clone()
+                    s.Name = "BBNSync"
+                    s.Parent = p.Character.Head
+                    s:Play()
+                    Debris:AddItem(s, s.TimeLength > 0 and s.TimeLength or 10)
+                end
+                -- Play Animation for you to see
+                local anim = mod:FindFirstChild("Loop") or mod:FindFirstChild("Start") or mod:FindFirstChild("Anim")
+                local hum = p.Character:FindFirstChild("Humanoid")
+                if anim and hum then
+                    hum:LoadAnimation(anim):Play()
                 end
             end
         end
     end
+
+    p:GetAttributeChangedSignal("CurrentBBNEmote"):Connect(onAttributeChanged)
 end
 
--- 2. UI SETUP
+Players.PlayerAdded:Connect(handleOtherPlayer)
+for _, p in ipairs(Players:GetPlayers()) do handleOtherPlayer(p) end
+
+-- 3. UI CONSTRUCTION
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "BBN_Tracker_V16"; screenGui.ResetOnSpawn = false; screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
+screenGui.Name = "BBN_Tracker_V17"; screenGui.ResetOnSpawn = false; screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
 
 local mainFrame = Instance.new("Frame")
 mainFrame.Size = UDim2.new(0, 200, 0, 340); mainFrame.Position = UDim2.new(0.5, -100, 0.4, 0)
@@ -102,7 +123,7 @@ local topBar = Instance.new("Frame")
 topBar.Size = UDim2.new(1, 0, 0, 30); topBar.BackgroundColor3 = Color3.fromRGB(15, 15, 15); topBar.Parent = mainFrame
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -35, 1, 0); title.Position = UDim2.new(0, 10, 0, 0); title.Text = "BBN TRACKER V16"
+title.Size = UDim2.new(1, -35, 1, 0); title.Position = UDim2.new(0, 10, 0, 0); title.Text = "BBN V17"
 title.TextColor3 = Color3.new(1, 1, 1); title.BackgroundTransparency = 1; title.Font = Enum.Font.GothamBold; title.Parent = topBar
 
 local closeBtn = Instance.new("TextButton")
@@ -142,29 +163,7 @@ local function populateDeep(folder, scroll, layout)
     scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y)
 end
 
--- 3. ESP ENGINE
-local function applyESP(obj, text, color, category, perm)
-    if not obj then return end
-    local part = obj:IsA("Model") and (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")) or obj
-    if not part then return end
-
-    local h = Instance.new("Highlight"); h.FillColor = color; h.Parent = obj
-    local b = Instance.new("BillboardGui"); b.Size = UDim2.new(0, 80, 0, 20); b.AlwaysOnTop = true
-    local l = Instance.new("TextLabel"); l.Size = UDim2.new(1,0,1,0); l.Text = text
-    l.TextColor3 = color; l.BackgroundTransparency = 1; l.Parent = b
-    b.Adornee = part; b.Parent = obj
-
-    if perm then 
-        table.insert(PersistentVisuals[category], h) 
-        table.insert(PersistentVisuals[category], b)
-    else 
-        task.delay(1, function() if h then h:Destroy() end if b then b:Destroy() end end) 
-    end
-end
-
-local function isKiller(p) return p:GetAttribute("TEAM") == "Killer" end
-
--- 4. CONTROLS
+-- 4. ESP & BUTTONS
 local content = Instance.new("Frame")
 content.Size = UDim2.new(1, 0, 1, -40); content.Position = UDim2.new(0, 0, 0, 40)
 content.BackgroundTransparency = 1; content.Parent = mainFrame
@@ -174,6 +173,16 @@ mainLayout.Padding = UDim.new(0, 4); mainLayout.HorizontalAlignment = Enum.Horiz
 local modeBtn = Instance.new("TextButton")
 modeBtn.Size = UDim2.new(0.9, 0, 0, 28); modeBtn.Text = "MODE: PING (1S)"
 modeBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 70); modeBtn.TextColor3 = Color3.new(1, 1, 1); modeBtn.Parent = content
+
+local function applyESP(obj, text, color, category, perm)
+    if not obj then return end
+    local h = Instance.new("Highlight"); h.FillColor = color; h.Parent = obj
+    local b = Instance.new("BillboardGui"); b.Size = UDim2.new(0, 80, 0, 20); b.AlwaysOnTop = true
+    local l = Instance.new("TextLabel"); l.Size = UDim2.new(1,0,1,0); l.Text = text; l.TextColor3 = color; l.BackgroundTransparency = 1; l.Parent = b
+    b.Adornee = obj:IsA("Model") and (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")) or obj; b.Parent = obj
+    if perm then table.insert(PersistentVisuals[category], h); table.insert(PersistentVisuals[category], b)
+    else task.delay(1, function() if h then h:Destroy() end if b then b:Destroy() end end) end
+end
 
 local function createMain(txt, clr)
     local b = Instance.new("TextButton"); b.Size = UDim2.new(0.9, 0, 0, 26); b.Text = txt
@@ -185,36 +194,12 @@ local kBtn = createMain("KILLERS", Color3.fromRGB(80, 20, 20))
 local sBtn = createMain("SURVIVORS", Color3.fromRGB(20, 80, 20))
 local tBtn = createMain("TRAPS", Color3.fromRGB(80, 80, 20))
 local cBtn = createMain("CLIENT USERS", Color3.fromRGB(20, 20, 80))
-local syncBtn = createMain("SYNC EMOTES", Color3.fromRGB(120, 60, 0)) -- NEW SYNC BUTTON
 local eBtn = createMain("EMOTES >", Color3.fromRGB(0, 80, 80))
 local aBtn = createMain("END ANIMS >", Color3.fromRGB(80, 0, 80))
 
-local function clearCategory(cat)
-    for _, v in ipairs(PersistentVisuals[cat]) do if v then v:Destroy() end end
-    PersistentVisuals[cat] = {}
-end
-
-syncBtn.MouseButton1Click:Connect(syncOtherClients)
-
-kBtn.MouseButton1Click:Connect(function() 
-    if MasterToggle then ActiveToggles.Killers = not ActiveToggles.Killers if not ActiveToggles.Killers then clearCategory("Killers") end
-    else for _, p in ipairs(Players:GetPlayers()) do if p ~= localPlayer and p.Character and isKiller(p) then applyESP(p.Character, p.Name:upper(), Color3.new(1,0,0), "Killers", false) end end end
-end)
-
-sBtn.MouseButton1Click:Connect(function() 
-    if MasterToggle then ActiveToggles.Survivors = not ActiveToggles.Survivors if not ActiveToggles.Survivors then clearCategory("Survivors") end
-    else for _, p in ipairs(Players:GetPlayers()) do if p ~= localPlayer and p.Character and not isKiller(p) then applyESP(p.Character, p.Name:upper(), Color3.new(0,1,0), "Survivors", false) end end end
-end)
-
-tBtn.MouseButton1Click:Connect(function() 
-    if MasterToggle then ActiveToggles.Traps = not ActiveToggles.Traps if not ActiveToggles.Traps then clearCategory("Traps") end
-    else for _, o in ipairs(Workspace:GetDescendants()) do if o.Name:find("BearTrap") or o.Name:find("Trap") then applyESP(o, "TRAP", Color3.new(1,1,0), "Traps", false) end end end
-end)
-
-cBtn.MouseButton1Click:Connect(function()
-    ActiveToggles.Clients = not ActiveToggles.Clients
-    if not ActiveToggles.Clients then clearCategory("Clients") end
-end)
+kBtn.MouseButton1Click:Connect(function() for _, p in ipairs(Players:GetPlayers()) do if p ~= localPlayer and p.Character and p:GetAttribute("TEAM") == "Killer" then applyESP(p.Character, p.Name:upper(), Color3.new(1,0,0), "Killers", MasterToggle) end end end)
+sBtn.MouseButton1Click:Connect(function() for _, p in ipairs(Players:GetPlayers()) do if p ~= localPlayer and p.Character and p:GetAttribute("TEAM") ~= "Killer" then applyESP(p.Character, p.Name:upper(), Color3.new(0,1,0), "Survivors", MasterToggle) end end end)
+tBtn.MouseButton1Click:Connect(function() for _, o in ipairs(Workspace:GetDescendants()) do if o.Name:find("BearTrap") or o.Name:find("Trap") then applyESP(o, "TRAP", Color3.new(1,1,0), "Traps", MasterToggle) end end end)
 
 modeBtn.MouseButton1Click:Connect(function()
     MasterToggle = not MasterToggle
@@ -230,38 +215,18 @@ closeBtn.MouseButton1Click:Connect(function() screenGui:Destroy() end)
 task.spawn(function()
     local ef = ReplicatedStorage:FindFirstChild("Emotes", true); local cf = ReplicatedStorage:FindFirstChild("CutscenesFolder", true)
     if ef then populateDeep(ef, eScroll, eLayout) end; if cf then populateDeep(cf, aScroll, aLayout) end
-
-    while task.wait(1) do
-        if MasterToggle then
-            if ActiveToggles.Killers then clearCategory("Killers"); for _, p in ipairs(Players:GetPlayers()) do if p ~= localPlayer and p.Character and isKiller(p) then applyESP(p.Character, p.Name:upper(), Color3.new(1,0,0), "Killers", true) end end end
-            if ActiveToggles.Survivors then clearCategory("Survivors"); for _, p in ipairs(Players:GetPlayers()) do if p ~= localPlayer and p.Character and not isKiller(p) then applyESP(p.Character, p.Name:upper(), Color3.new(0,1,0), "Survivors", true) end end end
-            if ActiveToggles.Traps then clearCategory("Traps"); for _, o in ipairs(Workspace:GetDescendants()) do if o.Name:find("BearTrap") or o.Name:find("Trap") then applyESP(o, "TRAP", Color3.new(1,1,0), "Traps", true) end end end
-        end
-        
-        clearCategory("Clients")
+    while task.wait(2) do
+        for _, v in ipairs(PersistentVisuals.Clients) do if v then v:Destroy() end end
+        PersistentVisuals.Clients = {}
         for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= localPlayer and p.Character then
-                local emoteTag = p:GetAttribute("CurrentBBNEmote")
-                if (emoteTag ~= nil) and ActiveToggles.Clients then
-                    applyESP(p.Character, "CLIENT USER: "..p.Name:upper(), Color3.new(0.4, 0.4, 1), "Clients", true)
-                end
-                if emoteTag and emoteTag ~= "" then
-                    local head = p.Character:FindFirstChild("Head")
-                    if head and not head:FindFirstChild("SyncSound") then
-                        local mod = ReplicatedStorage:FindFirstChild(emoteTag, true)
-                        local soundObj = mod and (mod:FindFirstChild("Sound") or mod:FindFirstChild("StartSound"))
-                        if soundObj then
-                            local s = soundObj:Clone(); s.Name = "SyncSound"; s.Parent = head; s:Play()
-                            Debris:AddItem(s, s.TimeLength > 0 and s.TimeLength or 5)
-                        end
-                    end
-                end
+            if p ~= localPlayer and p:GetAttribute("CurrentBBNEmote") then
+                applyESP(p.Character, "CLIENT: "..p.Name:upper(), Color3.new(0.4, 0.4, 1), "Clients", true)
             end
         end
     end
 end)
 
--- Draggable logic
+-- Draggable
 local d, s, st
 topBar.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then d = true s = i.Position st = mainFrame.Position end end)
 UserInputService.InputChanged:Connect(function(i) if d and i.UserInputType == Enum.UserInputType.MouseMovement then local delta = i.Position - s mainFrame.Position = UDim2.new(st.X.Scale, st.X.Offset + delta.X, st.Y.Scale, st.Y.Offset + delta.Y) end end)
