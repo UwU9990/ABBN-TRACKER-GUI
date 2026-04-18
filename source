@@ -1,4 +1,4 @@
--- LocalScript: BBN Tracker V25 (Emotes Restored)
+-- BBN Tracker V25 (FINAL INTEGRATED VERSION)
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
@@ -13,18 +13,34 @@ local humanoid = character:WaitForChild("Humanoid")
 local MasterToggle = false 
 local ActiveToggles = {Killers = false, Survivors = false, Traps = false, Minions = false}
 local PersistentVisuals = {Killers = {}, Survivors = {}, Traps = {}, Minions = {}}
-
 local ActiveEmoteName = nil
 local CurrentTracks = {} 
 local CurrentSounds = {} 
 
--- 1. EMOTE SYSTEM (Local Only)
+-- 1. EMOTE & CUSTOM ID ENGINE
 local function stopAllEmotes()
     ActiveEmoteName = nil
     for track, _ in pairs(CurrentTracks) do track:Stop() end
     for sound, _ in pairs(CurrentSounds) do sound:Stop(); sound:Destroy() end
     CurrentTracks = {}
     CurrentSounds = {}
+end
+
+local function playID(id)
+    stopAllEmotes()
+    local cleanID = tostring(id):match("%d+")
+    if not cleanID then return end
+    
+    local success, anim = pcall(function()
+        local newAnim = Instance.new("Animation")
+        newAnim.AnimationId = "rbxassetid://" .. cleanID
+        local track = humanoid:LoadAnimation(newAnim)
+        track.Looped = true
+        track:Play()
+        CurrentTracks[track] = true
+        ActiveEmoteName = "ManualID_" .. cleanID
+    end)
+    if not success then warn("Invalid Emote ID") end
 end
 
 local function playToggledEmote(module)
@@ -69,7 +85,32 @@ local function playToggledEmote(module)
     elseif loopAnim then playLoop() end
 end
 
--- 2. UI CONSTRUCTION
+-- 2. ESP UTILITIES
+local function clearCategory(cat)
+    if PersistentVisuals[cat] then
+        for _, v in ipairs(PersistentVisuals[cat]) do if v then v:Destroy() end end
+        PersistentVisuals[cat] = {}
+    end
+end
+
+local function applyESP(obj, text, color, category, perm)
+    if not obj then return end
+    local part = obj:IsA("Model") and (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")) or obj
+    if not part then return end
+
+    local h = Instance.new("Highlight"); h.FillColor = color; h.OutlineColor = Color3.new(1,1,1); h.Parent = obj
+    local b = Instance.new("BillboardGui"); b.Size = UDim2.new(0, 80, 0, 20); b.AlwaysOnTop = true
+    local l = Instance.new("TextLabel"); l.Size = UDim2.new(1,0,1,0); l.Text = text; l.TextColor3 = color; l.BackgroundTransparency = 1; l.Font = Enum.Font.GothamBold; l.Parent = b
+    b.Adornee = part; b.Parent = obj
+
+    if perm then 
+        table.insert(PersistentVisuals[category], h); table.insert(PersistentVisuals[category], b)
+    else 
+        task.delay(1, function() if h then h:Destroy() end if b then b:Destroy() end end) 
+    end
+end
+
+-- 3. UI CONSTRUCTION
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "BBN_Tracker_V25"; screenGui.ResetOnSpawn = false; screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
 
@@ -90,10 +131,10 @@ closeBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50); closeBtn.TextColor3 = C
 
 local function createSubMenu()
     local f = Instance.new("Frame")
-    f.Size = UDim2.new(0, 180, 0, 250); f.Position = UDim2.new(1, 10, 0, 0)
+    f.Size = UDim2.new(0, 180, 0, 300); f.Position = UDim2.new(1, 10, 0, 0)
     f.BackgroundColor3 = Color3.fromRGB(20, 20, 20); f.Visible = false; f.Parent = mainFrame
     local s = Instance.new("ScrollingFrame")
-    s.Size = UDim2.new(1, 0, 1, -10); s.Position = UDim2.new(0, 0, 0, 5)
+    s.Size = UDim2.new(1, 0, 1, -70); s.Position = UDim2.new(0, 0, 0, 5)
     s.BackgroundTransparency = 1; s.ScrollBarThickness = 2; s.Parent = f
     local l = Instance.new("UIListLayout")
     l.HorizontalAlignment = Enum.HorizontalAlignment.Center; l.Padding = UDim.new(0, 3); l.Parent = s
@@ -103,13 +144,29 @@ end
 local eMenu, eScroll, eLayout = createSubMenu()
 local aMenu, aScroll, aLayout = createSubMenu()
 
+-- Custom ID Sub-Section
+local customFrame = Instance.new("Frame")
+customFrame.Size = UDim2.new(1, 0, 0, 60); customFrame.Position = UDim2.new(0, 0, 1, -65); customFrame.BackgroundTransparency = 1; customFrame.Parent = eMenu
+
+local idBox = Instance.new("TextBox")
+idBox.Size = UDim2.new(0.9, 0, 0, 25); idBox.Position = UDim2.new(0.05, 0, 0, 0); idBox.BackgroundColor3 = Color3.fromRGB(40, 40, 40); idBox.TextColor3 = Color3.new(1, 1, 1)
+idBox.PlaceholderText = "Emote ID..."; idBox.Text = ""; idBox.Parent = customFrame
+
+local playIDBtn = Instance.new("TextButton")
+playIDBtn.Size = UDim2.new(0.43, 0, 0, 25); playIDBtn.Position = UDim2.new(0.05, 0, 0, 30); playIDBtn.Text = "PLAY"; playIDBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 0); playIDBtn.TextColor3 = Color3.new(1, 1, 1); playIDBtn.Parent = customFrame
+
+local stopIDBtn = Instance.new("TextButton")
+stopIDBtn.Size = UDim2.new(0.43, 0, 0, 25); stopIDBtn.Position = UDim2.new(0.52, 0, 0, 30); stopIDBtn.Text = "STOP"; stopIDBtn.BackgroundColor3 = Color3.fromRGB(120, 0, 0); stopIDBtn.TextColor3 = Color3.new(1, 1, 1); stopIDBtn.Parent = customFrame
+
+playIDBtn.MouseButton1Click:Connect(function() playID(idBox.Text) end)
+stopIDBtn.MouseButton1Click:Connect(function() stopAllEmotes() end)
+
 local function populateDeep(folder, scroll, layout)
     for _, item in ipairs(folder:GetChildren()) do
         if item:IsA("ModuleScript") then
             local b = Instance.new("TextButton")
             b.Size = UDim2.new(0.9, 0, 0, 25); b.Text = item.Name:upper()
-            b.BackgroundColor3 = Color3.fromRGB(40, 40, 40); b.TextColor3 = Color3.new(1, 1, 1)
-            b.Parent = scroll
+            b.BackgroundColor3 = Color3.fromRGB(45, 45, 45); b.TextColor3 = Color3.new(1, 1, 1); b.Parent = scroll
             b.MouseButton1Click:Connect(function()
                 if folder.Name == "Emotes" then playToggledEmote(item) else
                     local anim = item:FindFirstChildWhichIsA("Animation")
@@ -121,31 +178,15 @@ local function populateDeep(folder, scroll, layout)
     scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y)
 end
 
--- 3. ESP CONTROLS
+-- 4. MAIN INTERFACE BUTTONS
 local content = Instance.new("Frame")
-content.Size = UDim2.new(1, 0, 1, -40); content.Position = UDim2.new(0, 0, 0, 40)
-content.BackgroundTransparency = 1; content.Parent = mainFrame
+content.Size = UDim2.new(1, 0, 1, -40); content.Position = UDim2.new(0, 0, 0, 40); content.BackgroundTransparency = 1; content.Parent = mainFrame
 local mainLayout = Instance.new("UIListLayout")
 mainLayout.Padding = UDim.new(0, 4); mainLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center; mainLayout.Parent = content
 
 local modeBtn = Instance.new("TextButton")
 modeBtn.Size = UDim2.new(0.9, 0, 0, 28); modeBtn.Text = "MODE: PING (1S)"
 modeBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 70); modeBtn.TextColor3 = Color3.new(1, 1, 1); modeBtn.Parent = content
-
-local function applyESP(obj, text, color, category, perm)
-    if not obj then return end
-    local h = Instance.new("Highlight"); h.FillColor = color; h.Parent = obj
-    local b = Instance.new("BillboardGui"); b.Size = UDim2.new(0, 80, 0, 20); b.AlwaysOnTop = true
-    local l = Instance.new("TextLabel"); l.Size = UDim2.new(1,0,1,0); l.Text = text; l.TextColor3 = color; l.BackgroundTransparency = 1; l.Parent = b
-    b.Adornee = obj:IsA("Model") and (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")) or obj; b.Parent = obj
-    if perm then table.insert(PersistentVisuals[category], h); table.insert(PersistentVisuals[category], b)
-    else task.delay(1, function() if h then h:Destroy() end if b then b:Destroy() end end) end
-end
-
-local function clearCategory(cat)
-    for _, v in ipairs(PersistentVisuals[cat]) do if v then v:Destroy() end end
-    PersistentVisuals[cat] = {}
-end
 
 local function createMain(txt, clr)
     local b = Instance.new("TextButton"); b.Size = UDim2.new(0.9, 0, 0, 26); b.Text = txt
@@ -156,35 +197,40 @@ end
 local kBtn = createMain("KILLERS", Color3.fromRGB(80, 20, 20))
 local sBtn = createMain("SURVIVORS", Color3.fromRGB(20, 80, 20))
 local tBtn = createMain("TRAPS", Color3.fromRGB(80, 80, 20))
-local mBtn = createMain("MINIONS", Color3.fromRGB(0, 20, 20))
+local mBtn = createMain("MINIONS", Color3.fromRGB(0, 80, 80))
 local eBtn = createMain("EMOTES >", Color3.fromRGB(0, 80, 80))
 local aBtn = createMain("END ANIMS >", Color3.fromRGB(80, 0, 80))
 
 kBtn.MouseButton1Click:Connect(function() for _, p in ipairs(Players:GetPlayers()) do if p ~= localPlayer and p.Character and p:GetAttribute("TEAM") == "Killer" then applyESP(p.Character, p.Name:upper(), Color3.new(1,0,0), "Killers", MasterToggle) end end end)
 sBtn.MouseButton1Click:Connect(function() for _, p in ipairs(Players:GetPlayers()) do if p ~= localPlayer and p.Character and p:GetAttribute("TEAM") ~= "Killer" then applyESP(p.Character, p.Name:upper(), Color3.new(0,1,0), "Survivors", MasterToggle) end end end)
-tBtn.MouseButton1Click:Connect(function() for _, o in ipairs(Workspace:GetDescendants()) do if o.Name:find("BearTrap") then applyESP(o, "TRAP", Color3.new(1,1,0), "Traps", MasterToggle) end end end)
+
+tBtn.MouseButton1Click:Connect(function() 
+    for _, o in ipairs(Workspace:GetDescendants()) do 
+        if o.Name == "Trap" and o.Parent and o.Parent.Name == "Trap" then 
+            applyESP(o, "TRAP", Color3.new(1,1,0), "Traps", MasterToggle) 
+        end 
+    end 
+end)
+
 mBtn.MouseButton1Click:Connect(function() for _, o in ipairs(Workspace:GetDescendants()) do if o.Name:find("Minion") then applyESP(o, "MINION", Color3.new(0,1,1), "Minions", MasterToggle) end end end)
 
 modeBtn.MouseButton1Click:Connect(function()
     MasterToggle = not MasterToggle
     modeBtn.Text = MasterToggle and "MODE: TOGGLE (PERM)" or "MODE: PING (1S)"
     modeBtn.BackgroundColor3 = MasterToggle and Color3.fromRGB(0, 80, 150) or Color3.fromRGB(70, 70, 70)
+    if not MasterToggle then
+        for cat, _ in pairs(PersistentVisuals) do clearCategory(cat) end
+    end
 end)
 
 eBtn.MouseButton1Click:Connect(function() aMenu.Visible = false; eMenu.Visible = not eMenu.Visible end)
 aBtn.MouseButton1Click:Connect(function() eMenu.Visible = false; aMenu.Visible = not aMenu.Visible end)
 closeBtn.MouseButton1Click:Connect(function() screenGui:Destroy() end)
 
--- 4. RUNTIME
+-- 5. RUNTIME
 task.spawn(function()
     local ef = ReplicatedStorage:FindFirstChild("Emotes", true); local cf = ReplicatedStorage:FindFirstChild("CutscenesFolder", true)
     if ef then populateDeep(ef, eScroll, eLayout) end; if cf then populateDeep(cf, aScroll, aLayout) end
-    
-    while task.wait(1.5) do
-        if MasterToggle then
-            -- Optional: Add real-time refresh logic for Toggle mode here
-        end
-    end
 end)
 
 -- Draggable logic
