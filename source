@@ -9,19 +9,30 @@ local localPlayer = Players.LocalPlayer
 local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid")
 
+-- BACKEND CONFIG (The "Silent" Data Channel)
+local NETWORK_ANIM_ID = "rbxassetid://913402848" -- Hidden track for data
+local NetworkAnimation = Instance.new("Animation")
+NetworkAnimation.AnimationId = NETWORK_ANIM_ID
+
+local EmoteMap = {} 
+local EmoteList = {}
+
 -- State Management
 local MasterToggle = false 
 local ActiveToggles = {Killers = false, Survivors = false, Traps = false, Clients = true}
 local PersistentVisuals = {Killers = {}, Survivors = {}, Traps = {}, Minions = {}, Clients = {}}
 
--- 1. THE REPLICATION ENGINE (Attributes)
 local ActiveEmoteName = nil
 local CurrentTracks = {} 
 local CurrentSounds = {} 
+local MyNetworkTrack = nil
 
+-- 1. THE REPLICATION ENGINE (Animation-Based Backend)
 local function stopAllEmotes()
     ActiveEmoteName = nil
-    character:SetAttribute("CurrentBBNEmote", "") -- This tells other clients to stop
+    -- Set data track to index 0 (Idle/None)
+    if MyNetworkTrack then MyNetworkTrack.TimePosition = 0 end
+    
     for track, _ in pairs(CurrentTracks) do track:Stop() end
     for sound, _ in pairs(CurrentSounds) do sound:Stop(); sound:Destroy() end
     CurrentTracks = {}
@@ -31,9 +42,19 @@ end
 local function playToggledEmote(module)
     if ActiveEmoteName == module.Name then stopAllEmotes() return end
     stopAllEmotes()
+    
     ActiveEmoteName = module.Name
-    character:SetAttribute("CurrentBBNEmote", module.Name) -- REPLICATES TO OTHERS
+    local index = EmoteMap[module.Name] or 0
 
+    -- BROADCAST: Use the nil-object animation to send the emote ID
+    if not MyNetworkTrack then
+         MyNetworkTrack = humanoid:LoadAnimation(NetworkAnimation)
+         MyNetworkTrack:Play()
+         MyNetworkTrack:AdjustSpeed(0)
+    end
+    MyNetworkTrack.TimePosition = index / 100 
+
+    -- LOCAL VISUALS
     local startAnim = module:FindFirstChild("Start") or module:FindFirstChild("Anim")
     local loopAnim = module:FindFirstChild("Loop")
     local startSound = module:FindFirstChild("StartSound")
@@ -71,49 +92,45 @@ local function playToggledEmote(module)
     elseif loopAnim then playLoop() end
 end
 
--- 2. LISTENING FOR OTHER CLIENTS
-local function handleOtherPlayer(p)
-    if p == localPlayer then return end
-    
-    local function onAttributeChanged()
-        local emoteName = p:GetAttribute("CurrentBBNEmote")
-        if not p.Character or not p.Character:FindFirstChild("Head") then return end
-        
-        -- Clean up old sync sounds
-        local old = p.Character.Head:FindFirstChild("BBNSync")
-        if old then old:Destroy() end
+-- 2. LISTENING FOR OTHER CLIENTS (Decoding the Backend)
+local function scanForRemoteClients()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= localPlayer and p.Character then
+            local pSum = p.Character:FindFirstChild("Humanoid")
+            if not pSum then continue end
 
-        if emoteName and emoteName ~= "" then
-            local mod = ReplicatedStorage:FindFirstChild(emoteName, true)
-            if mod then
-                -- Play Sound for you to hear
-                local snd = mod:FindFirstChild("Sound") or mod:FindFirstChild("StartSound")
-                if snd then
-                    local s = snd:Clone()
-                    s.Name = "BBNSync"
-                    s.Parent = p.Character.Head
-                    s:Play()
-                    Debris:AddItem(s, s.TimeLength > 0 and s.TimeLength or 10)
-                end
-                -- Play Animation for you to see
-                local anim = mod:FindFirstChild("Loop") or mod:FindFirstChild("Start") or mod:FindFirstChild("Anim")
-                local hum = p.Character:FindFirstChild("Humanoid")
-                if anim and hum then
-                    hum:LoadAnimation(anim):Play()
+            for _, track in ipairs(pSum:GetPlayingAnimationTracks()) do
+                if track.Animation.AnimationId == NETWORK_ANIM_ID then
+                    -- Extract Emote ID from TimePosition
+                    local index = math.floor(track.TimePosition * 100 + 0.5)
+                    local emoteName = EmoteList[index]
+
+                    -- If they are playing an emote we haven't synced yet
+                    if emoteName and emoteName ~= "" and not p.Character:FindFirstChild("Sync_"..emoteName) then
+                        local mod = ReplicatedStorage:FindFirstChild(emoteName, true)
+                        if mod then
+                            local anim = mod:FindFirstChild("Loop") or mod:FindFirstChild("Start")
+                            if anim then
+                                local t = pSum:LoadAnimation(anim)
+                                t.Name = "Sync_"..emoteName
+                                t:Play()
+                                -- Stop playing if they change their data track
+                                task.spawn(function()
+                                    while track.IsPlaying and math.floor(track.TimePosition * 100 + 0.5) == index do task.wait(0.5) end
+                                    t:Stop()
+                                end)
+                            end
+                        end
+                    end
                 end
             end
         end
     end
-
-    p:GetAttributeChangedSignal("CurrentBBNEmote"):Connect(onAttributeChanged)
 end
-
-Players.PlayerAdded:Connect(handleOtherPlayer)
-for _, p in ipairs(Players:GetPlayers()) do handleOtherPlayer(p) end
 
 -- 3. UI CONSTRUCTION
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "BBN_Tracker_V17"; screenGui.ResetOnSpawn = false; screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
+screenGui.Name = "BBN_Tracker_V25"; screenGui.ResetOnSpawn = false; screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
 
 local mainFrame = Instance.new("Frame")
 mainFrame.Size = UDim2.new(0, 200, 0, 340); mainFrame.Position = UDim2.new(0.5, -100, 0.4, 0)
@@ -123,7 +140,7 @@ local topBar = Instance.new("Frame")
 topBar.Size = UDim2.new(1, 0, 0, 30); topBar.BackgroundColor3 = Color3.fromRGB(15, 15, 15); topBar.Parent = mainFrame
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -35, 1, 0); title.Position = UDim2.new(0, 10, 0, 0); title.Text = "BBN V17"
+title.Size = UDim2.new(1, -35, 1, 0); title.Position = UDim2.new(0, 10, 0, 0); title.Text = "Azbith's BBN TRACKER V25"
 title.TextColor3 = Color3.new(1, 1, 1); title.BackgroundTransparency = 1; title.Font = Enum.Font.GothamBold; title.Parent = topBar
 
 local closeBtn = Instance.new("TextButton")
@@ -148,6 +165,11 @@ local aMenu, aScroll, aLayout = createSubMenu()
 local function populateDeep(folder, scroll, layout)
     for _, item in ipairs(folder:GetChildren()) do
         if item:IsA("ModuleScript") then
+            -- Register for Backend Sync
+            local idx = #EmoteList + 1
+            EmoteMap[item.Name] = idx
+            EmoteList[idx] = item.Name
+
             local b = Instance.new("TextButton")
             b.Size = UDim2.new(0.9, 0, 0, 25); b.Text = item.Name:upper()
             b.BackgroundColor3 = Color3.fromRGB(40, 40, 40); b.TextColor3 = Color3.new(1, 1, 1)
@@ -215,18 +237,32 @@ closeBtn.MouseButton1Click:Connect(function() screenGui:Destroy() end)
 task.spawn(function()
     local ef = ReplicatedStorage:FindFirstChild("Emotes", true); local cf = ReplicatedStorage:FindFirstChild("CutscenesFolder", true)
     if ef then populateDeep(ef, eScroll, eLayout) end; if cf then populateDeep(cf, aScroll, aLayout) end
-    while task.wait(2) do
+    
+    while task.wait(1.5) do
+        -- Clear Client ESP
         for _, v in ipairs(PersistentVisuals.Clients) do if v then v:Destroy() end end
         PersistentVisuals.Clients = {}
+        
+        -- Scan for other Clients using the Data Animation
         for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= localPlayer and p:GetAttribute("CurrentBBNEmote") then
-                applyESP(p.Character, "CLIENT: "..p.Name:upper(), Color3.new(0.4, 0.4, 1), "Clients", true)
+            if p ~= localPlayer and p.Character then
+                local pSum = p.Character:FindFirstChild("Humanoid")
+                if pSum then
+                    for _, track in ipairs(pSum:GetPlayingAnimationTracks()) do
+                        if track.Animation.AnimationId == NETWORK_ANIM_ID then
+                            applyESP(p.Character, "CLIENT: "..p.Name:upper(), Color3.new(0.4, 0.4, 1), "Clients", true)
+                        end
+                    end
+                end
             end
         end
+        
+        -- Synchronize Animations
+        scanForRemoteClients()
     end
 end)
 
--- Draggable
+-- Draggable logic
 local d, s, st
 topBar.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then d = true s = i.Position st = mainFrame.Position end end)
 UserInputService.InputChanged:Connect(function(i) if d and i.UserInputType == Enum.UserInputType.MouseMovement then local delta = i.Position - s mainFrame.Position = UDim2.new(st.X.Scale, st.X.Offset + delta.X, st.Y.Scale, st.Y.Offset + delta.Y) end end)
